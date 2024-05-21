@@ -1,0 +1,57 @@
+name: Update Dependencies
+
+on:
+  schedule:
+    - cron: "0 0 * * 0" # Run every Sunday at midnight
+  workflow_dispatch:
+
+jobs:
+  update-dependencies:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check outdated dependencies
+        id: outdated
+        run: |
+          outdated_deps=$(pip list --outdated --format json)
+          echo "::set-output name=outdated::$outdated_deps"
+
+      - name: Process outdated dependencies
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          outdated_deps='${{ steps.outdated.outputs.outdated }}'
+          echo "$outdated_deps" | jq -c '.[]' | while read -r dep; do
+            package_name=$(echo "$dep" | jq -r '.name')
+            current_version=$(echo "$dep" | jq -r '.version')
+            latest_version=$(echo "$dep" | jq -r '.latest_version')
+
+            if grep -q "${package_name}" requirements.txt; then
+              branch_name="update-${package_name}-${latest_version}"
+
+              git config --global user.email "github-actions[bot]@users.noreply.github.com"
+              git config --global user.name "GitHub Actions Bot"
+
+              git checkout -b "$branch_name"
+
+              sed -i "s/${package_name}==${current_version}/${package_name}==${latest_version}/" requirements.txt
+              git add requirements.txt
+              git commit -m "Update ${package_name} to ${latest_version}"
+              git push origin "$branch_name"
+
+              gh pr create --title "Update ${package_name} to ${latest_version}" --body "This PR updates ${package_name} from ${current_version} to ${latest_version}." --base main --head "$branch_name" --label "dependencies" --label "automated"
+            fi
+          done
