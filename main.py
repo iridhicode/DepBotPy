@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 app = FastAPI(
-    title="PyDepUpdate",
+    title="DepBotPy",
     version="0.1.0",
 )
 
