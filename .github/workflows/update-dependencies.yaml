@@ -42,6 +42,12 @@ jobs:
             if grep -q "${package_name}" requirements.txt; then
               branch_name="update-${package_name}-${latest_version}"
 
+              # Check if the branch already exists
+              if git ls-remote --exit-code --heads origin "$branch_name" > /dev/null 2>&1; then
+                echo "Branch '$branch_name' already exists. Skipping update for ${package_name}."
+                continue
+              fi
+
               git config --global user.email "github-actions[bot]@users.noreply.github.com"
               git config --global user.name "GitHub Actions Bot"
 
@@ -55,3 +61,4 @@ jobs:
               gh pr create --title "Update ${package_name} to ${latest_version}" --body "This PR updates ${package_name} from ${current_version} to ${latest_version}." --base main --head "$branch_name" --label "dependencies" --label "automated"
             fi
           done
+
