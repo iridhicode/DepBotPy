@@ -70,9 +70,9 @@ jobs:
 
       - name: Cleanup
         run: |
-          if [[ $(git branch --show-current) == "main" || $(git branch --show-current) == "master" ]]; then
-            echo "Already on main branch. Nothing to do."
+          if [[ $(git branch --show-current) == "master"]]; then
+            echo "Already on master branch. Nothing to do."
           else
-            git checkout main
-            git branch | grep -v "main" | xargs git branch -D
+            git checkout master
+            git branch | grep -v "master" | xargs git branch -D
           fi
