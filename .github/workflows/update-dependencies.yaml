@@ -67,3 +67,12 @@ jobs:
               gh pr create --title "Update ${package_name} to ${latest_version}" --body "This PR updates ${package_name} from ${current_version} to ${latest_version}." --base main --head "$branch_name" --label "dependencies" --label "automated"
             fi
           done
+
+      - name: Cleanup
+        run: |
+          if [[ $(git branch --show-current) == "main" || $(git branch --show-current) == "master" ]]; then
+            echo "Already on main branch. Nothing to do."
+          else
+            git checkout main
+            git branch | grep -v "main" | xargs git branch -D
+          fi
