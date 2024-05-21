@@ -64,7 +64,7 @@ jobs:
               git commit -m "Update ${package_name} to ${latest_version}"
               git push origin "$branch_name"
 
-              gh pr create --title "Update ${package_name} to ${latest_version}" --body "This PR updates ${package_name} from ${current_version} to ${latest_version}." --base main --head "$branch_name" --label "dependencies" --label "automated"
+              gh pr create --title "Update ${package_name} to ${latest_version}" --body "This PR updates ${package_name} from ${current_version} to ${latest_version}." --base master --head "$branch_name" --label "dependencies" --label "automated"
             fi
           done
 
