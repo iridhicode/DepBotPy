@@ -1,5 +1,4 @@
 name: Update Dependencies
-
 on:
   schedule:
     - cron: "0 0 * * 0" # Run every Sunday at midnight
@@ -8,27 +7,26 @@ on:
 jobs:
   update-dependencies:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
+      
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.x"
-
+      
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
+      
       - name: Check outdated dependencies
         id: outdated
         run: |
           outdated_deps=$(pip list --outdated --format json)
-          echo "::set-output name=outdated::$outdated_deps"
-
+          echo "outdated=$outdated_deps" >> $GITHUB_OUTPUT
+      
       - name: Process outdated dependencies
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
@@ -38,39 +36,35 @@ jobs:
             package_name=$(echo "$dep" | jq -r '.name')
             current_version=$(echo "$dep" | jq -r '.version')
             latest_version=$(echo "$dep" | jq -r '.latest_version')
-
             if grep -q "${package_name}" requirements.txt; then
               branch_name="update-${package_name}-${latest_version}"
-
-              # Check if the branch already exists
               if git ls-remote --exit-code --heads origin "$branch_name" > /dev/null 2>&1; then
                 echo "Branch '$branch_name' already exists. Skipping update for ${package_name}."
                 continue
               fi
-
-              # Check if a pull request already exists for the branch
               if gh pr view "$branch_name" > /dev/null 2>&1; then
                 echo "Pull request for branch '$branch_name' already exists. Skipping update for ${package_name}."
                 continue
               fi
-
               git config --global user.email "github-actions[bot]@users.noreply.github.com"
               git config --global user.name "GitHub Actions Bot"
-
               git checkout -b "$branch_name"
-
               sed -i "s/${package_name}==${current_version}/${package_name}==${latest_version}/" requirements.txt
               git add requirements.txt
               git commit -m "Update ${package_name} to ${latest_version}"
               git push origin "$branch_name"
-
-              gh pr create --title "Update ${package_name} to ${latest_version}" --body "This PR updates ${package_name} from ${current_version} to ${latest_version}." --base master --head "$branch_name" --label "dependencies" --label "automated"
+              gh pr create --title "Update ${package_name} to ${latest_version}" \
+                          --body "This PR updates ${package_name} from ${current_version} to ${latest_version}." \
+                          --base master \
+                          --head "$branch_name" \
+                          --label "dependencies" \
+                          --label "automated"
             fi
           done
-
+      
       - name: Cleanup
         run: |
-          if [[ $(git branch --show-current) == "master"]]; then
+          if [[ "$(git branch --show-current)" == "master" ]]; then
             echo "Already on master branch. Nothing to do."
           else
             git checkout master
