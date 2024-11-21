@@ -65,14 +65,24 @@ jobs:
             latest_version=$(echo "$dep" | jq -r '.latest_version')
             if grep -q "${package_name}" requirements.txt; then
               branch_name="update-${package_name}-${latest_version}"
+              
+              # Check if branch exists
               if git ls-remote --exit-code --heads origin "$branch_name" > /dev/null 2>&1; then
                 echo "Branch '$branch_name' already exists. Skipping update for ${package_name}."
                 continue
               fi
+              
+              # Check if PR exists
               if gh pr view "$branch_name" > /dev/null 2>&1; then
                 echo "Pull request for branch '$branch_name' already exists. Skipping update for ${package_name}."
                 continue
               fi
+              
+              # Close existing PRs for this package
+              gh pr list --state open --search "in:title ${package_name}" --json number | jq -r '.[].number' | while read -r pr_number; do
+                gh pr close "$pr_number" -c "Closing in favor of new update PR"
+              done
+              
               git config --global user.email "github-actions[bot]@users.noreply.github.com"
               git config --global user.name "GitHub Actions Bot"
               git checkout -b "$branch_name"
