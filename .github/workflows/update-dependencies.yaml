@@ -8,21 +8,44 @@ on:
       GH_PAT:
         required: true
 jobs:
+  check-python-compatibility:
+    runs-on: ubuntu-latest
+    outputs:
+      working-version: ${{ steps.find-version.outputs.version }}
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - id: test-install
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          echo "success=true" >> $GITHUB_OUTPUT
+      - id: find-version
+        if: steps.test-install.outputs.success == 'true'
+        run: echo "version=${{ matrix.python-version }}" >> $GITHUB_OUTPUT
+
   update-dependencies:
+    needs: check-python-compatibility
+    if: needs.check-python-compatibility.outputs.working-version != ''
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: ${{ needs.check-python-compatibility.outputs.working-version }}
           cache: "pip"
       
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip build setuptools wheel
-          pip install -r requirements.txt --no-deps
           pip install -r requirements.txt
       
       - name: Check outdated dependencies
@@ -58,7 +81,9 @@ jobs:
               git commit -m "Update ${package_name} to ${latest_version}"
               git push origin "$branch_name"
               gh pr create --title "Update ${package_name} to ${latest_version}" \
-                          --body "This PR updates ${package_name} from ${current_version} to ${latest_version}." \
+                          --body "This PR updates ${package_name} from ${current_version} to ${latest_version}.
+                          
+                          Tested with Python ${{ needs.check-python-compatibility.outputs.working-version }}" \
                           --base master \
                           --head "$branch_name" \
                           --label "dependencies" \
@@ -67,6 +92,7 @@ jobs:
           done
       
       - name: Cleanup
+        if: always()
         run: |
           if [[ "$(git branch --show-current)" == "master" ]]; then
             echo "Already on master branch. Nothing to do."
