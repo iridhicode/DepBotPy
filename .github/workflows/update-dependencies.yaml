@@ -3,133 +3,34 @@ on:
   schedule:
     - cron: "0 0 * * 0" # Run every Sunday at midnight
   workflow_dispatch:
-  workflow_call:
-    secrets:
-      GH_PAT:
-        required: true
+    inputs:
+      languages:
+        description: 'Languages to update (comma-separated)'
+        required: false
+        default: 'python,node'
+        type: string
+
 jobs:
-  check-python-compatibility:
+  prepare:
     runs-on: ubuntu-latest
     outputs:
-      working-version: ${{ steps.find-version.outputs.version }}
-    strategy:
-      matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
-      fail-fast: false
+      languages: ${{ steps.set-languages.outputs.languages }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - id: test-install
-        continue-on-error: true
+      - id: set-languages
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install -r requirements.txt
-          echo "success=true" >> $GITHUB_OUTPUT
-      - id: find-version
-        if: steps.test-install.outputs.success == 'true'
-        run: echo "version=${{ matrix.python-version }}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "languages=${{ inputs.languages }}" >> $GITHUB_OUTPUT
+          else
+            # Default languages for scheduled runs
+            echo "languages=python,node" >> $GITHUB_OUTPUT
+          fi
 
   update-dependencies:
-    needs: check-python-compatibility
-    if: needs.check-python-compatibility.outputs.working-version != ''
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Fetch all history for all branches
-      
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ needs.check-python-compatibility.outputs.working-version }}
-          cache: "pip"
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip build setuptools wheel
-          pip install -r requirements.txt
-      
-      - name: Check outdated dependencies
-        id: outdated
-        run: |
-          outdated_deps=$(pip list --outdated --format json)
-          echo "outdated=$outdated_deps" >> $GITHUB_OUTPUT
-      
-      - name: Process outdated dependencies
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          outdated_deps='${{ steps.outdated.outputs.outdated }}'
-          echo "$outdated_deps" | jq -c '.[]' | while read -r dep; do
-            package_name=$(echo "$dep" | jq -r '.name')
-            current_version=$(echo "$dep" | jq -r '.version')
-            latest_version=$(echo "$dep" | jq -r '.latest_version')
-            if grep -q "${package_name}" requirements.txt; then
-              # Close existing PRs for this package first
-              gh pr list --state open --search "in:title ${package_name}" --json number | jq -r '.[].number' | while read -r pr_number; do
-                gh pr close "$pr_number" -c "Closing in favor of new update PR"
-              done
-              
-              branch_name="update-${package_name}-${latest_version}"
-              
-              # Delete old update branches for this package
-              git branch -r | grep "origin/update-${package_name}-" | while read -r old_branch; do
-                old_branch=${old_branch#origin/}
-                # Don't delete the branch we're about to create
-                if [ "$old_branch" != "$branch_name" ]; then
-                  echo "Deleting old branch: $old_branch"
-                  git push origin --delete "$old_branch" || true
-                fi
-              done
-              
-              # Check if branch exists
-              if git ls-remote --exit-code --heads origin "$branch_name" > /dev/null 2>&1; then
-                echo "Branch '$branch_name' already exists. Skipping update for ${package_name}."
-                continue
-              fi
-              
-              # Check if PR exists
-              if gh pr view "$branch_name" > /dev/null 2>&1; then
-                echo "Pull request for branch '$branch_name' already exists. Skipping update for ${package_name}."
-                continue
-              fi
-
-              git config --global user.email "github-actions[bot]@users.noreply.github.com"
-              git config --global user.name "GitHub Actions Bot"
-              git checkout -b "$branch_name"
-              sed -i "s/${package_name}==${current_version}/${package_name}==${latest_version}/" requirements.txt
-              git add requirements.txt
-              git commit -m "Update ${package_name} to ${latest_version}"
-              git push origin "$branch_name"
-              gh pr create --title "Update ${package_name} to ${latest_version}" \
-                          --body "This PR updates ${package_name} from ${current_version} to ${latest_version}.
-                          
-                          Tested with Python ${{ needs.check-python-compatibility.outputs.working-version }}" \
-                          --base master \
-                          --head "$branch_name" \
-                          --label "dependencies" \
-                          --label "automated"
-            fi
-          done             
-      
-      - name: Cleanup
-        if: always()
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          if [[ "$(git branch --show-current)" == "master" ]]; then
-            echo "Already on master branch. Nothing to do."
-          else
-            git checkout master
-          fi
-          
-          # Clean up local branches
-          git branch | grep -v "master" | xargs git branch -D || true
-          
-          # Clean up merged remote branches
-          gh pr list --state merged --search "label:dependencies label:automated" --json headRefName | \
-          jq -r '.[].headRefName' | while read -r branch; do
-            echo "Deleting merged branch: $branch"
-            git push origin --delete "$branch" || true
-          done
+    needs: prepare
+    strategy:
+      matrix:
+        language: ${{ fromJson(format('[{0}]', replace(needs.prepare.outputs.languages, ',', '","'))) }}
+      fail-fast: false
+    uses: ./.github/workflows/update-${{ matrix.language }}-dependencies.yml
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
