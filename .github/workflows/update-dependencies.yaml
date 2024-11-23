@@ -37,6 +37,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for all branches
       
       - uses: actions/setup-python@v5
         with:
@@ -71,6 +73,16 @@ jobs:
               
               branch_name="update-${package_name}-${latest_version}"
               
+              # Delete old update branches for this package
+              git branch -r | grep "origin/update-${package_name}-" | while read -r old_branch; do
+                old_branch=${old_branch#origin/}
+                # Don't delete the branch we're about to create
+                if [ "$old_branch" != "$branch_name" ]; then
+                  echo "Deleting old branch: $old_branch"
+                  git push origin --delete "$old_branch" || true
+                fi
+              done
+              
               # Check if branch exists
               if git ls-remote --exit-code --heads origin "$branch_name" > /dev/null 2>&1; then
                 echo "Branch '$branch_name' already exists. Skipping update for ${package_name}."
@@ -103,10 +115,21 @@ jobs:
       
       - name: Cleanup
         if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           if [[ "$(git branch --show-current)" == "master" ]]; then
             echo "Already on master branch. Nothing to do."
           else
             git checkout master
-            git branch | grep -v "master" | xargs git branch -D
           fi
+          
+          # Clean up local branches
+          git branch | grep -v "master" | xargs git branch -D || true
+          
+          # Clean up merged remote branches
+          gh pr list --state merged --search "label:dependencies label:automated" --json headRefName | \
+          jq -r '.[].headRefName' | while read -r branch; do
+            echo "Deleting merged branch: $branch"
+            git push origin --delete "$branch" || true
+          done
