@@ -1,4 +1,3 @@
-# .github/workflows/shared-branch-management.yml
 name: Shared Branch Management
 
 on:
@@ -47,31 +46,51 @@ jobs:
         run: |
           branch_name="${{ inputs.branch-prefix }}-${{ inputs.package-name }}-${{ inputs.latest-version }}"
           
-          # Close existing PRs for this package
-          gh pr list --state open --search "in:title ${{ inputs.package-name }}" --json number | \
+          # Only close open PRs that are:
+          # 1. Created by the bot
+          # 2. Have our dependency labels
+          # 3. Are for the same package
+          # 4. Created in the last 30 days
+          gh pr list \
+            --state open \
+            --search "author:app/github-actions in:title ${{ inputs.package-name }} label:dependencies label:automated created:>$(date -d '30 days ago' +'%Y-%m-%d')" \
+            --json number | \
           jq -r '.[].number' | while read -r pr_number; do
-            gh pr close "$pr_number" -c "Closing in favor of new update PR"
+            if [ ! -z "$pr_number" ]; then
+              echo "Closing PR #$pr_number as it's being superseded"
+              gh pr close "$pr_number" -c "Closing in favor of new update PR with version ${{ inputs.latest-version }}"
+            fi
           done
           
-          # Delete old update branches for this package
+          # Only delete branches that:
+          # 1. Match our specific package update pattern
+          # 2. Are not the current branch we're trying to create
+          # 3. Are not associated with open PRs
           git branch -r | grep "origin/${{ inputs.branch-prefix }}-${{ inputs.package-name }}-" | \
           while read -r old_branch; do
             old_branch=${old_branch#origin/}
             if [ "$old_branch" != "$branch_name" ]; then
-              echo "Deleting old branch: $old_branch"
-              git push origin --delete "$old_branch" || true
+              # Check if branch has an open PR
+              if ! gh pr list --state open --head "$old_branch" --json number | jq -e '.[0]' >/dev/null; then
+                echo "Deleting old branch: $old_branch"
+                git push origin --delete "$old_branch" || true
+              else
+                echo "Branch $old_branch has an open PR, skipping deletion"
+              fi
             fi
           done
           
-          # Check if branch exists
+          # Check if exact version branch exists
           if git ls-remote --exit-code --heads origin "$branch_name" > /dev/null 2>&1; then
             echo "Branch '$branch_name' already exists. Skipping update."
             exit 0
           fi
           
-          # Check if PR exists
-          if gh pr view "$branch_name" > /dev/null 2>&1; then
-            echo "Pull request for branch '$branch_name' already exists. Skipping update."
+          # Check if there's already an open PR for this exact version
+          if gh pr list --state open \
+            --search "in:title ${{ inputs.package-name }} ${{ inputs.latest-version }} label:dependencies label:automated" \
+            --json number | jq -e '.[0]' >/dev/null; then
+            echo "Pull request for version ${{ inputs.latest-version }} already exists. Skipping update."
             exit 0
           fi
 
@@ -88,8 +107,19 @@ jobs:
             --title "Update ${{ inputs.package-name }} to ${{ inputs.latest-version }}" \
             --body "This PR updates ${{ inputs.package-name }} from ${{ inputs.current-version }} to ${{ inputs.latest-version }}.
             
-            ${{ inputs.test-details }}" \
+            ${{ inputs.test-details }}
+            
+            **Changes:**
+            - Version: \`${{ inputs.current-version }}\` → \`${{ inputs.latest-version }}\`
+            - Type: Automated dependency update" \
             --base ${{ inputs.base-branch }} \
             --head "$BRANCH_NAME" \
             --label "dependencies" \
             --label "automated"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # Clean up local branches
+          git checkout ${{ inputs.base-branch }}
+          git branch | grep -v "${{ inputs.base-branch }}" | xargs git branch -D || true
